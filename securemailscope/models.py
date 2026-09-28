@@ -113,6 +113,7 @@ class MailSession:
     injection_indicators: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     stream_quality: dict[str, Any] = field(default_factory=dict)
+    transcript: list[dict[str, Any]] = field(default_factory=list)  # redacted, for the replay view
 
     @property
     def endpoint(self) -> str:
@@ -157,6 +158,8 @@ class TlsHandshake:
     certificates: list[bytes] = field(default_factory=list)   # DER, only visible <= TLS 1.2
     certificate_visible: bool = False
     alerts: list[tuple[int, int]] = field(default_factory=list)  # (level, description)
+    client_flow: list[str] = field(default_factory=list)   # messages in the order sent, for the replay view
+    server_flow: list[str] = field(default_factory=list)
     ja3: Optional[str] = None
     ja3_string: Optional[str] = None
     ja3s: Optional[str] = None

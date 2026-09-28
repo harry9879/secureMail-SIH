@@ -88,3 +88,14 @@ def test_cipher_profiles_from_names():
 
 def test_u16_list_ignores_odd_trailing_byte():
     assert tls._u16_list(struct.pack("!HH", 1, 2) + b"\x01") == [1, 2]
+
+
+def test_record_flow_names_messages_until_encryption(pki):
+    rng = random.Random(9)
+    flight = samples.server_hello(rng, 0x0303, 0xC02F) + samples.certificate_msg(pki.chain_der("mx")) + \
+        samples.ske_ecdhe(rng) + samples._hs(14, b"")
+    server = samples.records(22, flight) + samples.record(20, b"\x01") + samples.record(22, b"x" * 40) + samples.record(23, b"y" * 30)
+    assert tls.record_flow(server) == ["ServerHello", "Certificate", "ServerKeyExchange", "ServerHelloDone",
+                                       "ChangeCipherSpec", "encrypted records ×2"]
+    hs = tls.analyze(samples.client_hello(rng, "a"), server)
+    assert hs.client_flow == ["ClientHello"] and hs.server_flow[0] == "ServerHello"

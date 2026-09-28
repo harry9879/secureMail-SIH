@@ -86,6 +86,24 @@ def _looks_mangled(token: str, target: str) -> bool:
     return diff <= max(1, len(target) // 4) or "XXX" in t
 
 
+MAX_TRANSCRIPT = 80
+REDACTED = "•••••• (secret redacted)"
+
+
+def _t(sess: MailSession, direction: str, text: str, kind: str = "line", **extra) -> None:
+    """Record one redacted protocol line for the replay view. Never pass secrets or bodies here."""
+    if len(sess.transcript) >= MAX_TRANSCRIPT:
+        return
+    ev = {"dir": direction, "kind": kind, "text": text[:220]}
+    ev.update(extra)
+    sess.transcript.append(ev)
+
+
+def _t_smtp(sess: MailSession, resp: Optional[tuple[int, list[bytes]]], kind: str = "reply") -> None:
+    if resp:
+        _t(sess, "S", f"{resp[0]} {_dec(resp[1][0])}", kind)
+
+
 def _hostname_from(text: bytes) -> Optional[str]:
     for tok in text.split()[:2]:
         tok = tok.strip(b"[]")
@@ -185,7 +203,9 @@ def _switch_to_tls(sess: MailSession, flow: Flow, cr: _Reader, sr: _Reader, comm
             return start
         idx = next((i for i in range(len(rest) - 1) if rest[i] == 0x16 and rest[i + 1] == 0x03), -1)
         cleartext = rest if idx < 0 else rest[:idx]
-        verbs = [_dec(l.split(b" ")[0]).upper() for l in cleartext.split(b"\n") if l.strip()]
+        verbs = [_dec(l.strip().split(b" ")[0]).upper() for l in cleartext.split(b"\n") if l.strip()]
+        _t(sess, "C" if side == "client" else "S",
+           f"{' · '.join(verbs[:5]) or 'binary'}  ({len(cleartext)} bytes of cleartext before TLS)", "inject")
         if side == "client":
             sess.injection_indicators.append(
                 f"client sent {len(cleartext)} bytes of cleartext after {command} before TLS "
@@ -203,9 +223,12 @@ def _switch_to_tls(sess: MailSession, flow: Flow, cr: _Reader, sr: _Reader, comm
         sess.tls_client_bytes = flow.client_bytes[c_off:]
     if s_off is not None:
         sess.tls_server_bytes = flow.server_bytes[s_off:]
+    if c_off is not None or s_off is not None:
+        _t(sess, "-", f"TLS begins · client at byte {c_off} · server at byte {s_off}", "tls-switch")
     if c_off is None and s_off is None:
         tail = flow.client_bytes[cr.pos:]
         if tail:
+            _t(sess, "C", "cleartext continues: no TLS handshake followed", "strip")
             sess.strip_indicators.append(f"{command} accepted but session continued in cleartext (no TLS handshake)")
         else:
             sess.notes.append(f"{command} accepted but capture ends before any TLS bytes")
@@ -237,6 +260,7 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
     if banner:
         sess.banner = _dec(banner[1][0])
         sess.server_name = _hostname_from(banner[1][0])
+        _t_smtp(sess, banner, "banner")
     ehlo_seen = False
     while True:
         cmd = cr.line()
@@ -248,6 +272,11 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
         if not verb:
             continue
         sess.cleartext_commands.append(verb)
+        if verb == "AUTH":
+            a = arg.split(b" ", 1)
+            _t(sess, "C", f"AUTH {_dec(a[0]).upper()}" + (f" {REDACTED}" if len(a) > 1 else ""), "auth")
+        else:
+            _t(sess, "C", _dec(cmd), "starttls" if verb == "STARTTLS" else "cmd")
 
         if verb == "BDAT":  # chunk bytes precede the reply
             try:
@@ -256,7 +285,8 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
                 size = 0
             cr.take(size)
             sess.cleartext_message_bytes += size
-            _smtp_response(sr)
+            _t(sess, "C", f"[message chunk · {size} bytes, not stored]", "data")
+            _t_smtp(sess, _smtp_response(sr))
             continue
 
         resp = _smtp_response(sr)
@@ -269,14 +299,18 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
                     sess.server_name = _hostname_from(resp[1][0])
                 caps = [_dec(l).split(" ")[0].upper() for l in resp[1][1:]]
                 sess.capabilities = caps
+                _t(sess, "S", f"250 {_dec(resp[1][0])}", "caps", caps=caps)
                 if ehlo_seen:
                     sess.starttls_offered = "STARTTLS" in caps
                     for cap in caps:
                         if _looks_mangled(cap, "STARTTLS"):
                             sess.strip_indicators.append(f"EHLO capability '{cap}' is a same-length rewrite of STARTTLS")
+            else:
+                _t_smtp(sess, resp)
         elif verb == "STARTTLS":
             sess.starttls_requested = True
             sess.starttls_response = f"{code} {_dec(resp[1][0])}" if resp else None
+            _t_smtp(sess, resp, "starttls" if code == 220 else "strip")
             if code == 220:
                 _switch_to_tls(sess, flow, cr, sr, "STARTTLS")
                 return
@@ -288,6 +322,7 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
             responses: list[bytes] = [a[1]] if len(a) > 1 else []
             # SASL continuation: 334 challenge -> client line, until a final code
             while resp and resp[0] == 334:
+                _t_smtp(sess, resp)
                 line = cr.line()
                 if line is None:
                     resp = None
@@ -295,18 +330,24 @@ def _parse_smtp(flow: Flow, sess: MailSession) -> None:
                 if line == b"*":
                     break
                 responses.append(line)
+                _t(sess, "C", REDACTED, "auth")
                 resp = _smtp_response(sr)
+            _t_smtp(sess, resp)
             accepted = None if not resp else resp[0] == 235
             sess.auth_events.append(_sasl_event(mech, responses, accepted))
         elif verb == "DATA":
+            _t_smtp(sess, resp)
             if code == 354:
                 end = flow.client_bytes.find(b"\r\n.\r\n", cr.pos)
                 end = len(flow.client_bytes) if end < 0 else end + 5
                 sess.cleartext_message_bytes += end - cr.pos
+                _t(sess, "C", f"[message body · {end - cr.pos} bytes, not stored]", "data")
                 cr.pos = end
-                _smtp_response(sr)
-        elif verb == "QUIT":
-            break
+                _t_smtp(sess, _smtp_response(sr))
+        else:
+            _t_smtp(sess, resp)
+            if verb == "QUIT":
+                break
     if sess.starttls_offered is None and not ehlo_seen and sess.cleartext_commands:
         sess.notes.append("client used HELO/no EHLO: server capabilities unknown")
 
@@ -378,6 +419,8 @@ def _parse_imap(flow: Flow, sess: MailSession) -> None:
 
     if caps:
         set_caps(caps)
+    if greet:
+        _t(sess, "S", _dec(greet), "caps" if caps else "banner", caps=caps)
 
     while True:
         cmd = _imap_client_command(cr, sr, sess)
@@ -390,11 +433,19 @@ def _parse_imap(flow: Flow, sess: MailSession) -> None:
         arg = parts[2] if len(parts) > 2 else b""
         sess.cleartext_commands.append(verb)
         sasl: list[bytes] = []
-        if verb == "AUTHENTICATE":
+        t_tag = _dec(tag)
+        if verb == "LOGIN":
+            la = _imap_args(arg)
+            _t(sess, "C", f"{t_tag} LOGIN {la[0] if la else ''} {REDACTED}", "auth")
+        elif verb == "AUTHENTICATE":
             a = arg.split(b" ", 1)
+            _t(sess, "C", f"{t_tag} AUTHENTICATE {_dec(a[0]).upper()}" + (f" {REDACTED}" if len(a) > 1 else ""), "auth")
             if len(a) > 1:
                 sasl.append(a[1])  # SASL-IR
+        else:
+            _t(sess, "C", _dec(cmd), "starttls" if verb == "STARTTLS" else "cmd")
         tagged: Optional[bytes] = None
+        untagged_logged = 0
         while True:
             line = _imap_server_line(sr, sess)
             if line is None:
@@ -403,17 +454,26 @@ def _parse_imap(flow: Flow, sess: MailSession) -> None:
                 c = _imap_caps(line)
                 if c:
                     set_caps(c)
+                if untagged_logged < 4:
+                    lit = re.search(rb"\{(\d+)\}", line)
+                    text = _dec(line.split(b"{")[0]) + f"[message · {lit.group(1).decode()} bytes, not stored])" if lit else _dec(line)
+                    _t(sess, "S", text, "caps" if c else ("data" if lit else "reply"), **({"caps": c} if c else {}))
+                    untagged_logged += 1
                 continue
             if line.startswith(b"+") and verb == "AUTHENTICATE":
+                _t(sess, "S", _dec(line), "reply")
                 resp = cr.line()
                 if resp is None:
                     break
                 sasl.append(resp)
+                _t(sess, "C", REDACTED, "auth")
                 continue
             if line.startswith(tag + b" "):
                 tagged = line
                 break
         status = tagged.split(b" ")[1].upper() if tagged and len(tagged.split(b" ")) > 1 else b""
+        if tagged:
+            _t(sess, "S", _dec(tagged), ("starttls" if status == b"OK" else "strip") if verb == "STARTTLS" else "reply")
         c = _imap_caps(tagged or b"")
         if c:
             set_caps(c)
@@ -440,8 +500,11 @@ def _parse_imap(flow: Flow, sess: MailSession) -> None:
 
 # --------------------------------------------------------------------------- POP3 (RFC 1939 / 2449 / 2595)
 
-def _pop3_single(sr: _Reader) -> Optional[bytes]:
-    return sr.line()
+def _pop3_single(sr: _Reader, sess: Optional[MailSession] = None, kind: str = "reply") -> Optional[bytes]:
+    line = sr.line()
+    if sess is not None and line is not None:
+        _t(sess, "S", _dec(line), kind)
+    return line
 
 
 def _pop3_multi(sr: _Reader, sess: MailSession, count_bytes: bool) -> tuple[Optional[bytes], list[bytes]]:
@@ -457,6 +520,10 @@ def _pop3_multi(sr: _Reader, sess: MailSession, count_bytes: bool) -> tuple[Opti
         body.append(line)
     if count_bytes:
         sess.cleartext_message_bytes += sr.pos - start
+        _t(sess, "S", f"{_dec(first)}  [message · {sr.pos - start} bytes, not stored]", "data")
+    else:
+        caps = [_dec(l).split(" ")[0].upper() for l in body]
+        _t(sess, "S", _dec(first), "caps", caps=caps)
     return first, body
 
 
@@ -465,6 +532,8 @@ def _parse_pop3(flow: Flow, sess: MailSession) -> None:
     greet = sr.line() or b""
     sess.banner = _dec(greet)
     sess.server_name = _hostname_from(greet[4:]) if greet.startswith(b"+OK ") else None
+    if greet:
+        _t(sess, "S", _dec(greet), "banner")
     pending_user: Optional[str] = None
     while True:
         cmd = cr.line()
@@ -474,6 +543,15 @@ def _parse_pop3(flow: Flow, sess: MailSession) -> None:
         verb = _dec(parts[0]).upper()
         arg = parts[1] if len(parts) > 1 else b""
         sess.cleartext_commands.append(verb)
+        if verb == "PASS":
+            _t(sess, "C", f"PASS {REDACTED}", "auth")
+        elif verb == "APOP":
+            _t(sess, "C", f"APOP {_dec(arg.split(b' ')[0])} {REDACTED}", "auth")
+        elif verb == "AUTH":
+            a0 = arg.split(b" ", 1)
+            _t(sess, "C", f"AUTH {_dec(a0[0]).upper()}" + (f" {REDACTED}" if len(a0) > 1 else ""), "auth")
+        else:
+            _t(sess, "C", _dec(cmd), "starttls" if verb == "STLS" else "cmd")
         if verb == "CAPA":
             first, body = _pop3_multi(sr, sess, False)
             caps = [_dec(l).split(" ")[0].upper() for l in body]
@@ -488,6 +566,8 @@ def _parse_pop3(flow: Flow, sess: MailSession) -> None:
             _pop3_multi(sr, sess, False)
         elif verb == "STLS":
             resp = _pop3_single(sr)
+            if resp is not None:
+                _t(sess, "S", _dec(resp), "starttls" if resp.startswith(b"+OK") else "strip")
             sess.starttls_requested = True
             sess.starttls_response = _dec(resp) if resp else None
             if resp and resp.startswith(b"+OK"):
@@ -496,14 +576,14 @@ def _parse_pop3(flow: Flow, sess: MailSession) -> None:
             if resp:
                 sess.strip_indicators.append(f"STLS refused with '{_dec(resp)}'")
         elif verb == "USER":
-            _pop3_single(sr)
+            _pop3_single(sr, sess)
             pending_user = _dec(arg.strip())
         elif verb == "PASS":
-            resp = _pop3_single(sr)
+            resp = _pop3_single(sr, sess)
             sess.auth_events.append(AuthEvent("USER/PASS", pending_user, secret_exposed=bool(arg.strip()),
                                               accepted=resp.startswith(b"+OK") if resp else None))
         elif verb == "APOP":
-            resp = _pop3_single(sr)
+            resp = _pop3_single(sr, sess)
             user = _dec(arg.split(b" ")[0]) if arg else None
             sess.auth_events.append(AuthEvent("APOP", user, secret_exposed=False,
                                               accepted=resp.startswith(b"+OK") if resp else None))
@@ -516,17 +596,21 @@ def _parse_pop3(flow: Flow, sess: MailSession) -> None:
             responses = [a[1]] if len(a) > 1 else []
             resp = sr.line()
             while resp is not None and resp.startswith(b"+ "):
+                _t(sess, "S", _dec(resp), "reply")
                 line = cr.line()
                 if line is None:
                     resp = None
                     break
                 responses.append(line)
+                _t(sess, "C", REDACTED, "auth")
                 resp = sr.line()
+            if resp is not None:
+                _t(sess, "S", _dec(resp), "reply")
             sess.auth_events.append(_sasl_event(mech, responses, resp.startswith(b"+OK") if resp else None))
         elif verb == "QUIT":
-            _pop3_single(sr)
+            _pop3_single(sr, sess)
             break
         else:
-            _pop3_single(sr)
+            _pop3_single(sr, sess)
     if sess.starttls_offered is None and "CAPA" not in sess.cleartext_commands:
         sess.notes.append("client never sent CAPA: STLS support unknown")

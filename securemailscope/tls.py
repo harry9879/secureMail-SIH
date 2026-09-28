@@ -236,8 +236,57 @@ def parse_server_key_exchange(body: bytes, hs: TlsHandshake) -> None:
         hs.errors.append("malformed ServerKeyExchange")
 
 
+HS_NAMES = {1: "ClientHello", 2: "ServerHello", 4: "NewSessionTicket", 8: "EncryptedExtensions",
+            11: "Certificate", 12: "ServerKeyExchange", 13: "CertificateRequest", 14: "ServerHelloDone",
+            15: "CertificateVerify", 16: "ClientKeyExchange", 20: "Finished"}
+
+
+def record_flow(data: bytes) -> list[str]:
+    """The messages one direction sent, in order, for the replay view.
+
+    Cleartext handshake messages by name; after ChangeCipherSpec or the first
+    application-data record, only a count of encrypted records.
+    """
+    out: list[str] = []
+    hs = bytearray()
+    encrypted, enc_n, p = False, 0, 0
+
+    def flush() -> None:
+        for mtype, _ in split_messages(bytes(hs)):
+            out.append(HS_NAMES.get(mtype, f"handshake type {mtype}"))
+        hs.clear()
+
+    while p + 5 <= len(data) and len(out) < 40:
+        ctype, length = data[p], struct.unpack_from("!H", data, p + 3)[0]
+        if ctype not in (CT_CCS, CT_ALERT, CT_HANDSHAKE, CT_APPDATA) or data[p + 1] != 3:
+            break
+        frag = data[p + 5:p + 5 + length]
+        p += 5 + length
+        if encrypted:
+            enc_n += 1
+        elif ctype == CT_HANDSHAKE:
+            hs += frag
+        elif ctype == CT_ALERT:
+            flush()
+            level = "fatal" if frag[:1] == bytes([2]) else "warning"
+            out.append(f"Alert {level} {alert_name(frag[1]) if len(frag) > 1 else ''}".strip())
+        elif ctype == CT_CCS:
+            flush()
+            out.append("ChangeCipherSpec")
+            encrypted = True
+        else:
+            flush()
+            encrypted, enc_n = True, 1
+    flush()
+    if enc_n:
+        out.append(f"encrypted records ×{enc_n}")
+    return out
+
+
 def analyze(client_bytes: bytes, server_bytes: bytes) -> TlsHandshake:
     hs = TlsHandshake()
+    hs.client_flow = record_flow(client_bytes)
+    hs.server_flow = record_flow(server_bytes)
     c_hs, c_alerts, c_enc, c_err = read_records(client_bytes)
     s_hs, s_alerts, s_enc, s_err = read_records(server_bytes)
     hs.alerts = c_alerts + s_alerts

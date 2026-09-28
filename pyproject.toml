@@ -28,5 +28,8 @@ securemailscope = "securemailscope.cli:main"
 [tool.setuptools]
 packages = ["securemailscope"]
 
+[tool.setuptools.package-data]
+securemailscope = ["web/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

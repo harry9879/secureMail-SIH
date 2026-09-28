@@ -142,3 +142,27 @@ def test_smtp_data_body_not_parsed_as_commands():
 ])
 def test_mangled_capability_detection(token, target, expected):
     assert _looks_mangled(token, target) is expected
+
+
+def test_transcript_is_redacted_and_ordered():
+    client = L("EHLO laptop", "AUTH LOGIN", base64.b64encode(b"ananya@example.com").decode(),
+               base64.b64encode(b"Monsoon#2026").decode(), "DATA") + L("Subject: secret board pack", "", "body", ".") + L("QUIT")
+    server = smtp_server(("PIPELINING", "XXXXXXXX", "AUTH LOGIN")) + \
+        L("334 VXNlcm5hbWU6", "334 UGFzc3dvcmQ6", "235 ok", "354 go", "250 queued", "221 bye")
+    s = parse_session(make_flow(client, server, port=587), "S1")
+    kinds = [(e["dir"], e["kind"]) for e in s.transcript]
+    assert kinds[0] == ("S", "banner") and ("S", "caps") in kinds and ("C", "data") in kinds
+    caps = next(e for e in s.transcript if e["kind"] == "caps")
+    assert "XXXXXXXX" in caps["caps"]
+    text = json.dumps(s.transcript)
+    for secret in ("Monsoon", base64.b64encode(b"Monsoon#2026").decode(), base64.b64encode(b"ananya@example.com").decode(),
+                   "secret board pack"):
+        assert secret not in text
+
+
+def test_transcript_marks_injection_and_tls_switch():
+    client = L("EHLO x") + L("STARTTLS", "RSET") + CH
+    s = parse_session(make_flow(client, smtp_server() + L("220 Ready") + SH), "S")
+    inj = next(e for e in s.transcript if e["kind"] == "inject")
+    assert inj["text"].startswith("RSET ") and "\r" not in inj["text"]
+    assert s.transcript[-1]["kind"] == "tls-switch"

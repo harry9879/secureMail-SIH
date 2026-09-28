@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SecureMailScope</title>
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28' fill='none' stroke='%236FD6B6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='7' width='22' height='15' rx='2.5'/%3E%3Cpath d='M3.5 8.5 14 15.5l10.5-7'/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#app">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="22" height="15" rx="2.5"/><path d="M3.5 8.5 14 15.5l10.5-7"/><circle cx="21.5" cy="20.5" r="4.5" fill="var(--bg)"/><path d="m19.6 20.6 1.4 1.4 2.4-2.6"/></svg>
+    <span>SecureMailScope</span>
+  </a>
+  <nav class="topnav" aria-label="Primary">
+    <a href="#/" data-nav="home">Analyses</a>
+  </nav>
+  <div class="pill-quiet">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+    <span>Passive · metadata-only</span>
+  </div>
+</header>
+<main id="app" tabindex="-1"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:40px">This interface needs JavaScript. Without it, POST a capture to <code>/analyze</code> or use the command line.</p></noscript>
+<script src="/static/app.js"></script>
+</body>
+</html>

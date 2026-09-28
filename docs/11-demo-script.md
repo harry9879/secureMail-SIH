@@ -1,5 +1,7 @@
 # 11 · Demo script (about 7 minutes)
 
+> **Web version:** `python -m securemailscope serve`, open http://127.0.0.1:8000 and click **Run the built-in demo capture**. Let the wire replay play, since the red links are the attacks. Then click S010 and step through its handshake replay: the `STARTTLS` → `XXXXXXXX` morph at the network path is the moment to pause on. Then S012, where the certificate is swapped at the path. The CLI walkthrough below covers the same story.
+
 Prepare beforehand, so nothing is trained or generated live:
 
 ```bash

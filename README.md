@@ -65,11 +65,17 @@ Open `reports/demo_enterprise.html` in a browser. Run the tests:
 python -m pytest -q
 ```
 
-Or use the web UI (upload a capture, get the report):
+Or use the web UI:
 
 ```bash
 python -m securemailscope serve --trust-store samples/demo-ca.pem
 ```
+
+Open http://127.0.0.1:8000 and either drop in a capture or click **Run the built-in demo capture**. The frontend shows:
+
+- **Animated analysis**: the pipeline stages light up while the capture is analysed, then show their real timings.
+- **Wire replay**: the whole capture plays back as live traffic. Clients are on the left and servers on the right. Links seal mint when TLS comes up, turn orange when the session stays cleartext, and turn red with an interceptor marker when a session was stripped, injected, had its certificate swapped or was downgraded. A feed of findings builds up as sessions complete.
+- **Handshake replay**: click any session to step through it as a sequence diagram. You see TCP, the SMTP/IMAP/POP3 dialogue, STARTTLS, and ClientHello → ServerHello → Certificate → Finished. A stripped offer visibly turns `STARTTLS` into `XXXXXXXX` at the network path, and each finding lights up at the step that triggers it. Use play, pause, step, speed and the scrubber, or ← → and the space bar.
 
 Or use Docker (one container with the web UI on port 8000 and the samples built in):
 
