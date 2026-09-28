@@ -1,0 +1,8 @@
+cryptography>=43
+numpy>=1.26
+scikit-learn>=1.4
+flask>=3.0
+certifi
+# optional
+reportlab>=4.0   # PDF reports
+pytest>=8        # tests

@@ -1,0 +1,8 @@
+reports/
+samples/
+lab/captures/
+*.sqlite
+__pycache__/
+.pytest_cache/
+.claude/
+.git/

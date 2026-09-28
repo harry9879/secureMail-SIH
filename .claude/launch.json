@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "reports",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "reports"],
+      "port": 8765
+    },
+    {
+      "name": "web-ui",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "securemailscope", "serve", "--port", "8000", "--trust-store", "samples/demo-ca.pem"],
+      "port": 8000
+    }
+  ]
+}

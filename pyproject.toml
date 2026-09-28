@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "securemailscope"
+version = "1.0.0"
+description = "Passive email transport-security analysis from packet captures: STARTTLS stripping, plaintext credentials, TLS/X.509 weaknesses, per-endpoint anomaly baselining."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "cryptography>=43",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+pdf = ["reportlab>=4.0"]
+trust = ["certifi"]
+explain = ["shap>=0.45"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+securemailscope = "securemailscope.cli:main"
+
+[tool.setuptools]
+packages = ["securemailscope"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

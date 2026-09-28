@@ -1,0 +1,42 @@
+# SecureMailScope lab: a deliberately weak mail server, a STARTTLS-stripping proxy,
+# and a client that generates traffic and captures it with tcpdump.
+#
+#   docker compose up -d --build
+#   docker compose exec client /lab/traffic.sh          # writes captures/lab.pcap
+#   python -m securemailscope analyze lab/captures/lab.pcap -o reports
+#   docker compose down
+#
+# Everything stays on an internal Docker network. LAB USE ONLY.
+name: securemailscope-lab
+
+services:
+  mailserver:
+    build: ./mailserver
+    hostname: mail.lab.test
+    networks:
+      lab:
+        aliases: [mail.lab.test]
+
+  stripper:
+    image: python:3.11-slim
+    command: ["python", "/lab/strip_proxy.py", "--listen", "0.0.0.0", "--upstream", "mail.lab.test"]
+    volumes:
+      - ./strip_proxy.py:/lab/strip_proxy.py:ro
+    depends_on: [mailserver]
+    networks:
+      lab:
+        aliases: [stripped.lab.test]
+
+  client:
+    build: ./client
+    command: ["sleep", "infinity"]
+    cap_add: [NET_RAW, NET_ADMIN]   # tcpdump
+    volumes:
+      - ./captures:/captures
+      - ./traffic.sh:/lab/traffic.sh:ro
+    depends_on: [mailserver, stripper]
+    networks: [lab]
+
+networks:
+  lab:
+    internal: true
